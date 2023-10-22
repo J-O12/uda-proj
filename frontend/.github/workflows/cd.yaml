@@ -1,0 +1,107 @@
+name: Frontend Deployment workflow
+
+on:
+  # workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install Dependencies
+        working-directory: ./src
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint 
+
+      - name: Handle Lint Errors
+        if: failure()  # Run only if lint failss
+        run: npm lint --fix .
+
+      - name: Run tests
+        run: npm test
+
+      - name: Handle Test Errors
+        if: failure()  # Run only if tests fail
+        run: echo "Tests failed. Please check and fix the issues."
+
+  build:
+    runs-on: ubuntu-latest
+    # needs: [lint-and-test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install Dependencies
+        working-directory: ./src
+        run: npm ci
+
+      - name: Build Docker image and Upload Artifact
+        working-directory: ./
+        run: |
+          docker build -t udac:${{ github.sha }} .
+        uses: actions/upload-artifact@v2
+        with:
+          name: my-docker-image
+          path: setup/terraform
+          if-no-files-found: error # 'warn' or 'ignore' are also available, defaults to `warn`
+      
+
+
+  deploy-to-infra:
+    runs-on: ubuntu-latest
+    # needs: build
+    strategy:
+      matrix:
+        node-version: [12.x]
+
+    steps:
+      - uses: actions/checkout@v1
+      - name: Install Terraform
+        uses: little-core-labs/install-terraform@v2.0.0
+        with:
+            # version: 0.13.4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+
+
+      - name: Terraform apply
+        cd setup/terraform
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: download build image artifact
+        uses: actions/download-artifact@v3
+          with:
+          name: my-docker-image
+
+
+      - name: Push to AWS ECR
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:${{ github.sha }}
+
+
+  
